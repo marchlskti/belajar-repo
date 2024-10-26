@@ -1,0 +1,247 @@
+Resources:
+  vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.25.0.0/16
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MY-vpc
+
+  public1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      CidrBlock: 172.25.0.0/24
+      AvailabilityZone: "us-east-1a"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: subnet-public-a
+
+  public2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      CidrBlock: 172.25.1.0/24
+      AvailabilityZone: "us-east-1b"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: subnet-public-b
+
+  private1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      CidrBlock: 172.25.2.0/24
+      AvailabilityZone: "us-east-1a"
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: subnet-private-a
+
+  private2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      CidrBlock: 172.25.3.0/24
+      AvailabilityZone: "us-east-1b"
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: subnet-private-b
+
+  igw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: MY-igw
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref vpc
+      InternetGatewayId: !Ref igw
+
+  natgw:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EIP.AllocationId
+      SubnetId: !Ref public2
+      Tags:
+        - Key: Name
+          Value: MY-natgw
+
+  EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+        Domain: vpc
+
+  RouteTablePublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref vpc
+      Tags:
+        - Key: Name
+          Value: MY-rt-public
+
+  RouteTablePrivate:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref vpc
+      Tags:
+        - Key: Name
+          Value: rt-private
+
+  Routeigw:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref igw
+
+  Routenatgw:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref natgw
+
+  SubnetA1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref public1
+      RouteTableId: !Ref RouteTablePublic
+
+  SubnetA2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref public2
+      RouteTableId: !Ref RouteTablePublic
+
+  SubnetA3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref private1
+      RouteTableId: !Ref RouteTablePrivate
+
+  SubnetA4:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref private2
+      RouteTableId: !Ref RouteTablePrivate
+
+  sgALB:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      VpcId: !Ref vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      GroupName: MY-sg-lb
+      Tags:
+        - Key: Name
+          Value: MY-sg-lb
+
+  sgAPP:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow port 3000
+      VpcId: !Ref vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+      GroupName: MY-sg-app
+      Tags:
+        - Key: Name
+          Value: MY-sg-app
+
+  TG:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      IpAddressType: ipv4  
+      Name: TG-Frontend
+      Port: 3000
+      Protocol: HTTP
+      TargetType: instance
+      VpcId: !Ref vpc
+      Tags:
+        - Key: Name
+          Value: TG-Frontend
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      Name: MY-LB
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref sgALB
+      Subnets:
+        - !Ref public1
+        - !Ref public2
+      Type: application
+      Tags:
+        - Key: Name
+          Value: MY-LB
+
+  templateapp:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: MY-template-frontend
+      LaunchTemplateData:
+        ImageId: ami-0ebfd941bbafe70c6
+        SecurityGroupIds:
+          - !Ref sgAPP
+        UserData:
+          Fn::Base64:
+            !Sub |
+              #!/bin/bash
+              curl -fsSL https://rpm.nodesource.com/setup_21.x | sudo bash -
+              yum install -y nodejs git
+              mkdir /home/ec2-user/dashboard_teman
+              git clone https://github.com/SonyVansha/dashboard_teman.git /home/ec2-user/dashboard_teman
+              touch /home/ec2-user/dashboard_teman/.env
+              printf "API_URL=https://k5b1n15vc1.execute-api.us-east-1.amazonaws.com/prod/products" >> /home/ec2-user/dashboard_teman/.env
+              npm install --prefix /home/ec2-user/dashboard_teman
+              npm run start-prod --prefix /home/ec2-user/dashboard_teman
+        InstanceType: t2.micro
+      VersionDescription: This Template Frontend
+
+  ASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref templateapp
+        Version: !GetAtt templateapp.LatestVersionNumber
+      MaxSize: '4'
+      MinSize: '2'
+      VPCZoneIdentifier:   
+        - !Ref private1
+        - !Ref private2
+      TargetGroupARNs:
+        - !Ref TG
+      Tags:
+        - Key: Name
+          PropagateAtLaunch: true
+          Value: MY-frontend
+        
+  ScalingPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      AutoScalingGroupName: !Ref ASG
+      PolicyType: PredictiveScaling
+      PredictiveScalingConfiguration:
+        MetricSpecifications:
+          - TargetValue: '70'
+            PredefinedMetricPairSpecification:
+              PredefinedMetricType: ASGCPUUtilization
+        Mode: ForecastOnly
